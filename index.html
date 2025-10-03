@@ -1,0 +1,456 @@
+<!--
+CRM (HTML/CSS/JS) using Google Sheets as backend
+Single-file demo (index.html)
+
+Includes:
+ - Login / Sign up that creates two sheets per executive
+ - Dashboard with analytics (basic) and follow-ups
+ - Entry page for sending connection / acceptance records
+ - Settings page to enter Google Apps Script Web App URL
+ - Uses JSONP for GETs (CORS-free) and form POST via hidden iframe for writes (CORS-free)
+
+INSTRUCTIONS (short):
+1) Create a Google Apps Script project (see script code below) and deploy as Web App:
+   - Execute the app as: Me
+   - Who has access: Anyone, even anonymous
+   - Copy the Web App URL and paste into Settings -> Connect
+
+2) Host this file (index.html) on GitHub Pages or open locally.
+
+3) The Apps Script is included below under the comment: "--- APPS SCRIPT CODE ---"
+
+CAUTION / NOTES:
+ - This is a lightweight prototype suited for small teams. For production, use proper auth (OAuth), server-side proxy, and rate limits.
+ - The app uses JSONP for GET endpoints and hidden-iframe POST for writes to avoid CORS issues with GAS.
+
+-->
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>LinkedIn CRM — Simple</title>
+  <style>
+    :root{
+      --bg:#0f1724; --card:#0b1220; --muted:#9aa4b2; --accent:#7c3aed; --glass: rgba(255,255,255,0.03);
+      --glass-2: rgba(255,255,255,0.02);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:linear-gradient(180deg,#071124 0%,#081426 100%);color:#e6eef6}
+    .container{max-width:1100px;margin:28px auto;padding:20px}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+    h1{font-size:20px;margin:0}
+    .card{background:linear-gradient(180deg,var(--card),#051226);border-radius:12px;padding:14px;box-shadow:0 6px 20px rgba(2,6,23,0.6)}
+    .muted{color:var(--muted);font-size:13px}
+    nav{display:flex;gap:8px}
+    .btn{background:var(--accent);padding:10px 12px;border-radius:10px;color:white;border:0;font-weight:600;cursor:pointer}
+    .btn.ghost{background:transparent;border:1px solid rgba(255,255,255,0.06)}
+    .grid{display:grid;grid-template-columns:1fr 320px;gap:14px}
+    .small{font-size:13px}
+    /* forms */
+    label{display:block;font-size:13px;margin-bottom:6px}
+    input[type=text],select,input[type=time],input[type=date]{width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:var(--glass);color:inherit}
+    .row{display:flex;gap:10px}
+    .col{flex:1}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px;text-align:left;border-bottom:1px solid rgba(255,255,255,0.03);font-size:13px}
+    .stat{display:flex;gap:8px;align-items:center}
+    .spark{height:40px;width:80px;border-radius:6px;background:linear-gradient(90deg,#0b1430,#07102a)}
+    .hidden{display:none}
+    /* gentle animations */
+    .fade{transition:all .18s ease}
+    .fade:hover{transform:translateY(-3px)}
+    footer{margin-top:22px;color:var(--muted);font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>LinkedIn CRM — Minimal</h1>
+        <div class="muted">Track connection requests, acceptances & daily activity</div>
+      </div>
+      <nav>
+        <button class="btn" id="nav-dashboard">Dashboard</button>
+        <button class="btn ghost" id="nav-entry">Entries</button>
+        <button class="btn ghost" id="nav-settings">Settings</button>
+        <button class="btn ghost" id="logoutBtn">Logout</button>
+      </nav>
+    </header>
+
+    <!-- LOGIN VIEW -->
+    <div id="loginView" class="card">
+      <h2 style="margin-top:0">Sign in / Create account</h2>
+      <p class="muted">Enter your name — a workbook with two sheets will be created for you automatically.</p>
+      <div style="max-width:540px;margin-top:10px">
+        <label>Full name</label>
+        <input id="loginName" type="text" placeholder="e.g. Aisha Khan" />
+        <div style="height:10px"></div>
+        <label>Google Apps Script Web App URL (Paste once in Settings later)</label>
+        <input id="loginGAS" type="text" placeholder="Optional — can set in Settings" />
+        <div style="height:12px"></div>
+        <button class="btn" id="loginBtn">Sign in / Create Sheets</button>
+        <div style="height:8px"></div>
+        <div class="muted">Tip: Deploy the included Apps Script (see bottom of this file) as a Web App and paste its URL in Settings.</div>
+      </div>
+    </div>
+
+    <!-- MAIN APP VIEWS -->
+    <div id="app" class="hidden">
+      <div class="grid">
+        <div>
+          <div id="dashboard" class="card fade">
+            <h3>Overview</h3>
+            <div style="display:flex;gap:12px;margin-top:12px;align-items:center">
+              <div style="flex:1">
+                <div class="stat">
+                  <div style="font-size:22px;font-weight:700" id="stat-sent">0</div>
+                  <div class="muted">Total connections sent</div>
+                </div>
+                <div style="height:10px"></div>
+                <div class="stat">
+                  <div style="font-size:22px;font-weight:700" id="stat-accepted">0</div>
+                  <div class="muted">Total accepted</div>
+                </div>
+              </div>
+              <div class="spark"></div>
+            </div>
+            <div style="height:14px"></div>
+            <div>
+              <h4 style="margin:0">Acceptance rate by country/state</h4>
+              <div id="acceptanceBreakdown" class="muted" style="margin-top:8px">Loading...</div>
+            </div>
+            <div style="height:12px"></div>
+            <h4 style="margin:0">Follow-ups due today</h4>
+            <div id="followups" class="muted" style="margin-top:8px">—</div>
+          </div>
+
+          <div id="entriesView" class="card hidden" style="margin-top:12px">
+            <h3>Quick entry</h3>
+            <form id="entryForm">
+              <div class="row">
+                <div class="col">
+                  <label>Date (IST)</label>
+                  <input type="date" id="entryDate" required />
+                </div>
+                <div class="col">
+                  <label>Time (IST 12-hour)</label>
+                  <select id="entryTime">
+                    <!-- times populated by JS -->
+                  </select>
+                </div>
+              </div>
+
+              <div style="height:10px"></div>
+
+              <div class="row">
+                <div class="col">
+                  <label>Country/Region</label>
+                  <select id="entryCountry">
+                    <option value="USA">USA</option>
+                    <option value="UK">UK</option>
+                    <option value="UAE">UAE</option>
+                    <option value="Canada">Canada</option>
+                    <option value="Australia">Australia</option>
+                    <option value="Europe">European country</option>
+                  </select>
+                </div>
+                <div class="col">
+                  <label>State (if USA)</label>
+                  <select id="entryState">
+                    <option value="">—</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style="height:10px"></div>
+
+              <div class="row">
+                <div class="col">
+                  <label>Connections sent (number)</label>
+                  <input id="entrySent" type="text" placeholder="e.g. 12" />
+                </div>
+                <div class="col">
+                  <label>Connections accepted (number)</label>
+                  <input id="entryAccepted" type="text" placeholder="e.g. 2" />
+                </div>
+              </div>
+
+              <div style="height:10px"></div>
+              <button class="btn" type="submit">Save entry</button>
+            </form>
+          </div>
+
+          <div id="acceptDetails" class="card hidden" style="margin-top:12px">
+            <h3>Record an Accepted Connection</h3>
+            <form id="acceptForm">
+              <div class="row">
+                <div class="col">
+                  <label>Acceptance date</label>
+                  <input type="date" id="accDate" />
+                </div>
+                <div class="col">
+                  <label>Name</label>
+                  <input id="accName" type="text" />
+                </div>
+              </div>
+              <div style="height:10px"></div>
+              <label>LinkedIn URL</label>
+              <input id="accUrl" type="text" />
+              <div style="height:10px"></div>
+              <div class="row">
+                <div class="col"><label>Company</label><input id="accCompany" type="text" /></div>
+                <div class="col"><label>Designation</label><input id="accDesig" type="text" /></div>
+              </div>
+
+              <div style="height:10px"></div>
+              <div class="row">
+                <div class="col"><label>Industry</label><input id="accIndustry" type="text" /></div>
+                <div class="col">
+                  <label>Company size</label>
+                  <select id="accSize">
+                    <option>1-10</option>
+                    <option>11-50</option>
+                    <option>51-200</option>
+                    <option>200-500</option>
+                    <option>1000+</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style="height:10px"></div>
+              <div class="row">
+                <label style="display:flex;align-items:center;gap:8px"><input id="accPosted" type="checkbox" /> Posted recently</label>
+                <label style="display:flex;align-items:center;gap:8px"><input id="accHiring" type="checkbox" /> Hiring for tech</label>
+              </div>
+
+              <div style="height:10px"></div>
+              <div class="row">
+                <div class="col"><label>Relevance (1-5)</label><input id="accRating" type="text" placeholder="e.g. 4"/></div>
+                <div class="col"><label>Connection status</label>
+                  <select id="accStatus"><option>to be connected</option><option>connected</option><option>not interested</option><option>warm</option></select>
+                </div>
+              </div>
+
+              <div style="height:10px"></div>
+              <button class="btn" id="saveAccept">Save accepted connection</button>
+            </form>
+          </div>
+
+        </div>
+        <aside>
+          <div class="card">
+            <h4>Profile</h4>
+            <div id="profileName" style="font-weight:700">—</div>
+            <div class="muted" id="profileSheets">No sheets connected</div>
+            <div style="height:12px"></div>
+            <h4>Quick actions</h4>
+            <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+              <button class="btn ghost" id="btn-refresh">Refresh data</button>
+              <button class="btn ghost" id="btn-show-entry">New entry</button>
+              <button class="btn ghost" id="btn-show-acc">Record acceptance</button>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:12px">
+            <h4>Settings</h4>
+            <div class="muted">Connected GAS URL:</div>
+            <div id="connectedUrl" class="small">—</div>
+            <div style="height:8px"></div>
+            <div class="muted">Workbook name convention:</div>
+            <div class="small">LinkedCRM - {Full name}</div>
+          </div>
+        </aside>
+      </div>
+
+      <div id="settingsView" class="card hidden" style="margin-top:12px">
+        <h3>Settings</h3>
+        <div class="muted">Paste your deployed Google Apps Script Web App URL below</div>
+        <div style="height:8px"></div>
+        <input id="settingsGAS" type="text" placeholder="https://script.google.com/macros/s/ABCDE/exec" />
+        <div style="height:8px"></div>
+        <button class="btn" id="saveSettings">Save & Connect</button>
+        <div style="height:12px"></div>
+        <div class="muted">Add/Remove country states (Admin)</div>
+      </div>
+
+    </div>
+
+    <footer class="muted">Built with HTML/CSS/JS + Google Sheets (Apps Script). Hosted on GitHub Pages.</footer>
+  </div>
+
+  <!-- hidden iframe for POST (to avoid CORS) -->
+  <iframe id="post_iframe" name="post_iframe" class="hidden"></iframe>
+
+  <script>
+    // ---- Utility & state ----
+    const state = {
+      user: null,
+      gasUrl: null,
+      workbookName: null
+    }
+
+    // load times for dropdown
+    function makeTimes(){
+      const sel = document.getElementById('entryTime');
+      sel.innerHTML='';
+      for(let h=1;h<=12;h++){
+        ['00','15','30','45'].forEach(m=>{
+          const opt=document.createElement('option');opt.value=`${h}:${m}`;opt.innerText=`${h}:${m}`;sel.appendChild(opt)
+        })
+      }
+    }
+    makeTimes();
+
+    // US states example
+    const US_STATES = ['','Alabama','Alaska','Arizona','Arkansas','California','...','New York','Texas']
+    function populateStates(){
+      const s=document.getElementById('entryState');s.innerHTML='';US_STATES.forEach(st=>{const o=document.createElement('option');o.value=st;o.innerText=st;s.appendChild(o)})
+    }
+    populateStates();
+
+    // ---- Views ----
+    const loginView = document.getElementById('loginView')
+    const app = document.getElementById('app')
+    const dashboard = document.getElementById('dashboard')
+    const entriesView = document.getElementById('entriesView')
+    const acceptDetails = document.getElementById('acceptDetails')
+    const settingsView = document.getElementById('settingsView')
+
+    document.getElementById('nav-dashboard').addEventListener('click',()=>{show('dashboard')})
+    document.getElementById('nav-entry').addEventListener('click',()=>{show('entries')})
+    document.getElementById('nav-settings').addEventListener('click',()=>{show('settings')})
+    document.getElementById('btn-show-entry').addEventListener('click',()=>{show('entries')})
+    document.getElementById('btn-show-acc').addEventListener('click',()=>{show('accept')})
+    document.getElementById('logoutBtn').addEventListener('click',logout)
+
+    function show(name){
+      loginView.classList.add('hidden')
+      app.classList.remove('hidden')
+      entriesView.classList.add('hidden')
+      acceptDetails.classList.add('hidden')
+      settingsView.classList.add('hidden')
+      if(name==='dashboard') dashboard.classList.remove('hidden')
+      if(name==='entries') entriesView.classList.remove('hidden')
+      if(name==='accept') acceptDetails.classList.remove('hidden')
+      if(name==='settings') settingsView.classList.remove('hidden')
+      // scroll to top
+      window.scrollTo({top:0,behavior:'smooth'})
+    }
+
+    // ---- Storage ----
+    function saveLocal(){localStorage.setItem('crx_state',JSON.stringify(state))}
+    function loadLocal(){const s=localStorage.getItem('crx_state');if(s){Object.assign(state,JSON.parse(s));applyState()}}
+    function applyState(){if(state.user){document.getElementById('profileName').innerText=state.user;document.getElementById('profileSheets').innerText=state.workbookName||'Not created';document.getElementById('connectedUrl').innerText=state.gasUrl||'—';document.getElementById('settingsGAS').value=state.gasUrl||'';loginView.classList.add('hidden');app.classList.remove('hidden');show('dashboard')} }
+    loadLocal()
+
+    // ---- Login / Create Sheets ----
+    document.getElementById('loginBtn').addEventListener('click',async ()=>{
+      const name=document.getElementById('loginName').value.trim();
+      const gas=document.getElementById('loginGAS').value.trim()||state.gasUrl
+      if(!name){alert('Enter name');return}
+      state.user=name;state.gasUrl=gas;state.workbookName=`LinkedCRM - ${name}`;saveLocal();applyState();
+      if(!gas){alert('Paste your Apps Script Web App URL in Settings first — or paste now in the input.');return}
+      // call createSheets endpoint via JSONP
+      jsonpFetch(`${gas}?action=createSheets&workbook=${encodeURIComponent(state.workbookName)}&user=${encodeURIComponent(state.user)}`,(data)=>{
+        if(data && data.ok){alert('Sheets created/verified.');fetchAllData()}else{alert('Could not create sheets. Check Apps Script deployment and URL.')}
+      })
+    })
+
+    // JSONP GET helper (avoids CORS by using script tag)
+    function jsonpFetch(url,cb){
+      const callbackName = 'cb_'+Math.random().toString(36).slice(2)
+      window[callbackName]=function(res){try{cb(res)}finally{delete window[callbackName]}}
+      const s=document.createElement('script');s.src = url + (url.includes('?')?'&':'?') + 'callback='+callbackName;document.body.appendChild(s);
+      // remove script after load
+      s.onload = ()=> setTimeout(()=>document.body.removeChild(s),200)
+    }
+
+    // ---- Create / Save entry via hidden iframe POST to avoid CORS ----
+    function postFormToGAS(payload,callback){
+      const gas = state.gasUrl; if(!gas){alert('No GAS URL set in Settings');return}
+      // build form
+      const form = document.createElement('form');form.method='POST';form.action=gas;form.target='post_iframe';form.className='hidden';
+      for(const k in payload){const inp=document.createElement('input');inp.type='hidden';inp.name=k;inp.value=payload[k];form.appendChild(inp)}
+      document.body.appendChild(form);
+      // listen iframe message
+      window.addEventListener('message',function handler(e){if(e.source !== document.getElementById('post_iframe').contentWindow) return; try{const data=typeof e.data==='string'?JSON.parse(e.data):e.data;callback(data)}catch(err){callback({ok:false})} window.removeEventListener('message',handler)},false)
+      form.submit();setTimeout(()=>document.body.removeChild(form),500)
+    }
+
+    // ---- Entry form submit ----
+    document.getElementById('entryForm').addEventListener('submit',e=>{
+      e.preventDefault();
+      const payload = {
+        action:'addEntry',
+        workbook: state.workbookName,
+        user: state.user,
+        date: document.getElementById('entryDate').value,
+        time: document.getElementById('entryTime').value,
+        country: document.getElementById('entryCountry').value,
+        state: document.getElementById('entryState').value,
+        sent: document.getElementById('entrySent').value||0,
+        accepted: document.getElementById('entryAccepted').value||0
+      }
+      postFormToGAS(payload,(res)=>{if(res && res.ok){alert('Entry saved');fetchAllData()}else{alert('Failed to save entry')}})
+    })
+
+    // ---- Accept form ----
+    document.getElementById('saveAccept').addEventListener('click',e=>{
+      e.preventDefault();
+      const accDate = document.getElementById('accDate').value || new Date().toISOString().slice(0,10)
+      const payload = {
+        action:'addAcceptance',workbook:state.workbookName,user:state.user,
+        accDate, name:document.getElementById('accName').value, url:document.getElementById('accUrl').value,
+        company:document.getElementById('accCompany').value,designation:document.getElementById('accDesig').value,
+        industry:document.getElementById('accIndustry').value,size:document.getElementById('accSize').value,
+        posted:document.getElementById('accPosted').checked?1:0,hiring:document.getElementById('accHiring').checked?1:0,
+        rating:document.getElementById('accRating').value,status:document.getElementById('accStatus').value
+      }
+      postFormToGAS(payload,(res)=>{if(res && res.ok){alert('Accepted connection recorded');fetchAllData()}else{alert('Failed to save acceptance')}})
+    })
+
+    // ---- Settings save ----
+    document.getElementById('saveSettings').addEventListener('click',()=>{
+      const u=document.getElementById('settingsGAS').value.trim(); if(!u){alert('Paste URL');return}
+      state.gasUrl=u;saveLocal();applyState();alert('Saved');
+    })
+
+    // ---- Fetch data + compute simple analytics ----
+    function fetchAllData(){
+      if(!state.gasUrl) return;
+      jsonpFetch(`${state.gasUrl}?action=getOverview&workbook=${encodeURIComponent(state.workbookName)}&user=${encodeURIComponent(state.user)}`,(data)=>{
+        if(!data || !data.ok){console.warn('no data',data);return}
+        // update UI
+        document.getElementById('stat-sent').innerText = data.totalSent||0
+        document.getElementById('stat-accepted').innerText = data.totalAccepted||0
+        const breakdown = data.breakdown || {}
+        let html = ''
+        for(const k in breakdown){html += `<div>${k}: ${breakdown[k].accepted}/${breakdown[k].sent} (${Math.round((breakdown[k].accepted/(breakdown[k].sent||1))*100)}%)</div>`}
+        document.getElementById('acceptanceBreakdown').innerHTML = html || 'No data yet'
+        // followups
+        const follow = data.followups || []
+        document.getElementById('followups').innerHTML = follow.length? follow.map(f=>`<div><a href="${f.url}" target="_blank">${f.name||f.url}</a> — follow-up on ${f.nextFollow}</div>`).join('') : 'None today'
+      })
+    }
+
+    // ---- Logout ----
+    function logout(){state.user=null;state.workbookName=null;saveLocal();location.reload()}
+
+    // ---- Kickoff: if state has user, fetch data ----
+    if(state.user && state.gasUrl) fetchAllData()
+
+    // ---- Hidden iframe listener: apps script should postMessage to parent with JSON string
+    // (Apps Script HTML response when writing should include script: parent.postMessage(JSON.stringify({ok:true}), '*'); )
+
+    // ---- small helpful polyfills ----
+    window.addEventListener('message',function(e){/* debug console.log('msg',e.data) */})
+
+  </script>
+
+
+
+</body>
+</html>
